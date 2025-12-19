@@ -4,30 +4,32 @@ import { useEffect, useState } from "react"
 import { useAuth } from "../lib/AuthContext"
 import { useRouter } from "next/navigation"
 import { fetchPolls } from "../services/pollService"
-import { Poll } from "../types/poll"
 import { submitVote } from "../services/voteService"
 import { getUserInterests } from "../services/userService"
+import { scorePollV2 } from "../services/feedScoring"
+import { Poll } from "../types/poll"
 
-// ✅ FIX 1: Define a new type that includes the score
+// Poll with computed score
 type ScoredPoll = Poll & { _score: number }
 
 export default function Home() {
   const { user, loading } = useAuth()
   const router = useRouter()
-  
-  // ✅ FIX 2: Update state to use ScoredPoll instead of just Poll
+
   const [polls, setPolls] = useState<ScoredPoll[]>([])
   const [loadingPolls, setLoadingPolls] = useState(true)
   const [userVotes, setUserVotes] = useState<Record<string, number>>({})
 
+  // 🔐 Protect route
   useEffect(() => {
     if (!loading && !user) {
       router.push("/login")
     }
   }, [user, loading, router])
 
+  // 📥 Load polls + interests + rank feed
   useEffect(() => {
-    const loadData = async () => {
+    const loadFeed = async () => {
       if (!user) return
 
       try {
@@ -36,29 +38,28 @@ export default function Home() {
           getUserInterests(user.uid),
         ])
 
-        // ✅ FIX 3: Type assertion is now valid because we add the _score property
         const rankedPolls: ScoredPoll[] = pollsData
           .map((poll) => ({
             ...poll,
-            _score: scorePoll(poll, userInterests as Record<string, number>),
+            _score: scorePollV2(poll, userInterests),
           }))
           .sort((a, b) => b._score - a._score)
 
         setPolls(rankedPolls)
-      } catch (error) {
-        console.error("Error loading feed:", error)
+      } catch (err) {
+        console.error("Error loading adaptive feed:", err)
       } finally {
         setLoadingPolls(false)
       }
     }
 
     if (!loading) {
-      loadData()
+      loadFeed()
     }
   }, [user, loading])
 
   if (loading || !user) return <p>Checking authentication...</p>
-  if (loadingPolls) return <p>Loading polls...</p>
+  if (loadingPolls) return <p>Loading personalized feed...</p>
 
   return (
     <main style={{ padding: 40 }}>
@@ -72,16 +73,16 @@ export default function Home() {
             padding: 20,
             marginTop: 20,
             borderRadius: 8,
-            // Now poll._score is valid because 'polls' is type ScoredPoll[]
             borderColor: poll._score > 0 ? "#2196f3" : "#ccc",
           }}
         >
           <h3>{poll.question}</h3>
+
           <p style={{ fontSize: 14, color: "#666" }}>
             Category: {poll.category}
             {poll.tags && ` | Tags: ${poll.tags.join(", ")}`}
             <span style={{ marginLeft: 10, fontSize: 10, opacity: 0.5 }}>
-              (Score: {poll._score})
+              (Score: {poll._score.toFixed(2)})
             </span>
           </p>
 
@@ -92,11 +93,10 @@ export default function Home() {
                 const previousVote = userVotes[poll.id]
                 if (previousVote === opt.id) return
 
-                setPolls((prevPolls) =>
-                  prevPolls.map((p) => {
+                // 🔥 Optimistic UI update
+                setPolls((prev) =>
+                  prev.map((p) => {
                     if (p.id !== poll.id) return p
-                    
-                    // Logic to update counts optimistically
                     return {
                       ...p,
                       options: p.options.map((o) => {
@@ -112,7 +112,11 @@ export default function Home() {
                   })
                 )
 
-                setUserVotes((prev) => ({ ...prev, [poll.id]: opt.id }))
+                setUserVotes((prev) => ({
+                  ...prev,
+                  [poll.id]: opt.id,
+                }))
+
                 await submitVote(user.uid, poll.id, opt.id)
               }}
               style={{
@@ -133,31 +137,4 @@ export default function Home() {
       ))}
     </main>
   )
-}
-
-// ------------------------------------------------------------------
-// Helper: Value-Based Scoring
-// ------------------------------------------------------------------
-function scorePoll(poll: Poll, userInterests: Record<string, number>) {
-  if (!userInterests) return 0
-
-  let score = 0
-
-  // 1. Category Score
-  if (userInterests[poll.category]) {
-    score += (userInterests[poll.category] || 0) * 0.5
-
-  }
-
-  // 2. Tag Scores (Deduplicated)
-  if (poll.tags && Array.isArray(poll.tags)) {
-    const uniqueTags = new Set(poll.tags)
-    
-    uniqueTags.forEach((tag) => {
-      const interestValue = userInterests[tag] || 0
-      score += interestValue
-    })
-  }
-
-  return score
 }
