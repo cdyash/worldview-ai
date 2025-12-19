@@ -5,6 +5,8 @@ import { useAuth } from "../lib/AuthContext"
 import { useRouter } from "next/navigation"
 import { fetchPolls } from "../services/pollService"
 import { Poll } from "../types/poll"
+import { submitVote } from "../services/voteService"
+
 
 export default function Home() {
   const { user, loading } = useAuth()
@@ -50,10 +52,21 @@ export default function Home() {
           </p>
 
           {poll.options.map((opt) => (
-            <div key={opt.id}>
-              {opt.text} — {opt.count} votes
-            </div>
-          ))}
+            <button
+            key={opt.id}
+            onClick={() => submitVote(user!.uid, poll.id, opt.id)}
+            style={{
+                display: "block",
+                marginTop: 8,
+                padding: "6px 12px",
+                borderRadius: 6,
+                border: "1px solid #ccc",
+                cursor: "pointer",
+                }}
+  >
+    {opt.text} — {opt.count} votes
+  </button>
+))}
         </div>
       ))}
     </main>
