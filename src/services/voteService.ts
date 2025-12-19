@@ -5,6 +5,13 @@ import {
   serverTimestamp,
 } from "firebase/firestore"
 
+/**
+ * Submit or switch a vote for a poll.
+ * - Uses Firestore transaction (safe)
+ * - Updates poll option counts
+ * - Stores user vote in `user_votes`
+ * - Updates user interests based on poll tags (+3 per tag)
+ */
 export async function submitVote(
   userId: string,
   pollId: string,
@@ -13,38 +20,61 @@ export async function submitVote(
   const voteDocId = `${userId}_${pollId}`
   const voteRef = doc(db, "user_votes", voteDocId)
   const pollRef = doc(db, "polls", pollId)
+  const userRef = doc(db, "users", userId)
 
   await runTransaction(db, async (transaction) => {
+    // 1️⃣ Read poll
     const pollSnap = await transaction.get(pollRef)
     if (!pollSnap.exists()) {
       throw new Error("Poll does not exist")
     }
 
     const pollData = pollSnap.data()
-    const options = pollData.options
+    const options = [...pollData.options] // clone for safety
+    const tags: string[] = pollData.tags || []
 
+    // 2️⃣ Read existing vote (if any)
     const voteSnap = await transaction.get(voteRef)
 
-    // 🟢 If user already voted → undo old vote
+    let oldOptionIndex: number | null = null
+
     if (voteSnap.exists()) {
-      const oldIndex = voteSnap.data().selectedOptionIndex
-      if (oldIndex === newOptionIndex) return
+      oldOptionIndex = voteSnap.data().selectedOptionIndex
 
-      options[oldIndex].count -= 1
-    }
+      // If user clicks same option again → do nothing
+      if (oldOptionIndex === newOptionIndex) {
+        return
+      }
 
-    // 🟢 Apply new vote
+      // Undo old vote
+      if (oldOptionIndex !== null) {
+    options[oldOptionIndex].count -= 1
+  }
+}
+
+    // 3️⃣ Apply new vote
     options[newOptionIndex].count += 1
 
-    // 🟢 Update poll counts
+    // 4️⃣ Update poll counts
     transaction.update(pollRef, { options })
 
-    // 🟢 Save vote record
+    // 5️⃣ Save / update user vote
     transaction.set(voteRef, {
       userId,
       pollId,
       selectedOptionIndex: newOptionIndex,
       updatedAt: serverTimestamp(),
     })
+
+    // 6️⃣ Update user interests (+3 per tag)
+    const interestUpdates: Record<string, number> = {}
+
+    tags.forEach((tag) => {
+      interestUpdates[`interests.${tag}`] = 3
+    })
+
+    if (Object.keys(interestUpdates).length > 0) {
+      transaction.update(userRef, interestUpdates)
+    }
   })
 }
