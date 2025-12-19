@@ -3,25 +3,28 @@
 import { useState } from "react"
 import { signInWithEmailAndPassword } from "firebase/auth"
 import { auth } from "../../lib/firebaseClient"
+import { useRouter } from "next/navigation"
 
 export default function LoginPage() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
-
+  const router = useRouter()
   const handleLogin = async () => {
-    setError("")
-    setLoading(true)
+  setError("")
+  setLoading(true)
 
-    try {
-      await signInWithEmailAndPassword(auth, email, password)
-    } catch (err: any) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
+  try {
+    await signInWithEmailAndPassword(auth, email, password)
+    router.push("/") // ✅ REDIRECT AFTER LOGIN
+  } catch (err: any) {
+    setError(err.message)
+  } finally {
+    setLoading(false)
   }
+}
+
 
   return (
     <main style={{ padding: 40, maxWidth: 400 }}>

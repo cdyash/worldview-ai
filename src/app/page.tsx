@@ -1,40 +1,61 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { useAuth } from "../lib/AuthContext"
-import { signOut } from "firebase/auth"
-import { auth } from "../lib/firebaseClient"
+import { useRouter } from "next/navigation"
+import { fetchPolls } from "../services/pollService"
+import { Poll } from "../types/poll"
 
 export default function Home() {
   const { user, loading } = useAuth()
+  const router = useRouter()
+  const [polls, setPolls] = useState<Poll[]>([])
+  const [loadingPolls, setLoadingPolls] = useState(true)
 
-  if (loading) return <p>Loading auth state...</p>
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push("/login")
+    }
+  }, [user, loading, router])
 
-  const handleLogout = async () => {
-    await signOut(auth)
-  }
+  useEffect(() => {
+    const loadPolls = async () => {
+      const data = await fetchPolls()
+      setPolls(data)
+      setLoadingPolls(false)
+    }
+    loadPolls()
+  }, [])
+
+  if (loading || !user) return <p>Checking authentication...</p>
+  if (loadingPolls) return <p>Loading polls...</p>
 
   return (
     <main style={{ padding: 40 }}>
       <h1>WorldView AI</h1>
 
-      {user ? (
-        <>
-          <p>✅ Logged in as: {user.email}</p>
-          <button
-            onClick={handleLogout}
-            style={{
-              marginTop: 20,
-              padding: "10px 20px",
-              background: "black",
-              color: "white",
-            }}
-          >
-            Logout
-          </button>
-        </>
-      ) : (
-        <p>❌ Not logged in</p>
-      )}
+      {polls.map((poll) => (
+        <div
+          key={poll.id}
+          style={{
+            border: "1px solid #ccc",
+            padding: 20,
+            marginTop: 20,
+            borderRadius: 8,
+          }}
+        >
+          <h3>{poll.question}</h3>
+          <p style={{ fontSize: 14, color: "#666" }}>
+            Category: {poll.category}
+          </p>
+
+          {poll.options.map((opt) => (
+            <div key={opt.id}>
+              {opt.text} — {opt.count} votes
+            </div>
+          ))}
+        </div>
+      ))}
     </main>
   )
 }
