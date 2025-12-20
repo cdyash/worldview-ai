@@ -7,10 +7,10 @@ import {
 
 /**
  * Submit or switch a vote for a poll.
- * - Uses Firestore transaction (safe)
- * - Updates poll option counts
- * - Stores user vote in `user_votes`
- * - Updates user interests based on poll tags (+3 per tag)
+ * Includes:
+ * - Vote switching
+ * - Interest reinforcement
+ * - TRUE time decay
  */
 export async function submitVote(
   userId: string,
@@ -23,42 +23,30 @@ export async function submitVote(
   const userRef = doc(db, "users", userId)
 
   await runTransaction(db, async (transaction) => {
-    // 1️⃣ Read poll
     const pollSnap = await transaction.get(pollRef)
-    if (!pollSnap.exists()) {
-      throw new Error("Poll does not exist")
-    }
+    const userSnap = await transaction.get(userRef)
+
+    if (!pollSnap.exists()) throw new Error("Poll not found")
+    if (!userSnap.exists()) throw new Error("User not found")
 
     const pollData = pollSnap.data()
-    const options = [...pollData.options] // clone for safety
-    const tags: string[] = pollData.tags || []
+    const userData = userSnap.data()
 
-    // 2️⃣ Read existing vote (if any)
+    // -----------------------
+    // 1️⃣ Handle vote switching
+    // -----------------------
+    const options = [...pollData.options]
     const voteSnap = await transaction.get(voteRef)
 
-    let oldOptionIndex: number | null = null
-
     if (voteSnap.exists()) {
-      oldOptionIndex = voteSnap.data().selectedOptionIndex
+      const oldIndex = voteSnap.data().selectedOptionIndex
+      if (oldIndex === newOptionIndex) return
+      options[oldIndex].count -= 1
+    }
 
-      // If user clicks same option again → do nothing
-      if (oldOptionIndex === newOptionIndex) {
-        return
-      }
-
-      // Undo old vote
-      if (oldOptionIndex !== null) {
-    options[oldOptionIndex].count -= 1
-  }
-}
-
-    // 3️⃣ Apply new vote
     options[newOptionIndex].count += 1
-
-    // 4️⃣ Update poll counts
     transaction.update(pollRef, { options })
 
-    // 5️⃣ Save / update user vote
     transaction.set(voteRef, {
       userId,
       pollId,
@@ -66,15 +54,45 @@ export async function submitVote(
       updatedAt: serverTimestamp(),
     })
 
-    // 6️⃣ Update user interests (+3 per tag)
-    const interestUpdates: Record<string, number> = {}
+    // -----------------------
+    // 2️⃣ APPLY TIME DECAY (REAL)
+    // -----------------------
+    const interests: Record<string, number> = userData.interests || {}
+    const lastUpdate = userData.lastInterestUpdate?.toDate?.()
 
+    let decayedInterests = { ...interests }
+
+    if (lastUpdate) {
+      const now = new Date()
+      const daysPassed =
+        (now.getTime() - lastUpdate.getTime()) / (1000 * 60 * 60 * 24)
+
+      const decaySteps = Math.floor(daysPassed / 7)
+      if (decaySteps > 0) {
+        const decayFactor = Math.pow(0.9, decaySteps)
+        Object.keys(decayedInterests).forEach((tag) => {
+          decayedInterests[tag] *= decayFactor
+          if (decayedInterests[tag] < 0.1) {
+            delete decayedInterests[tag]
+          }
+        })
+      }
+    }
+
+    // -----------------------
+    // 3️⃣ Reinforce current poll tags
+    // -----------------------
+    const tags: string[] = pollData.tags || []
     tags.forEach((tag) => {
-      interestUpdates[`interests.${tag}`] = 3
+      decayedInterests[tag] = (decayedInterests[tag] || 0) + 3
     })
 
-    if (Object.keys(interestUpdates).length > 0) {
-      transaction.update(userRef, interestUpdates)
-    }
+    // -----------------------
+    // 4️⃣ Persist interests + timestamp
+    // -----------------------
+    transaction.update(userRef, {
+      interests: decayedInterests,
+      lastInterestUpdate: serverTimestamp(),
+    })
   })
 }
